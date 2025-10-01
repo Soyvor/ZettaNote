@@ -2,75 +2,51 @@ import Page from "../../models/Page.js";
 import { verifyToken } from "../../util/token.js";
 import { z } from "zod";
 
+// Define schema once (outside function)
+const renamePageSchema = z.object({
+  token: z.string().min(1, "Token is required"),
+  pageId: z.string().min(1, "Page ID is required"),
+  newPageName: z.string().min(1, "New page name is required"),
+});
+
+// Helper for responses
+const makeResponse = (status, message) => ({
+  resStatus: status,
+  resMessage: { message },
+});
+
 export default async function renamePage(req) {
-    try {
-		// Zod validation
-		const renamePageSchema = z.object({
-			token: z.string().min(1, "Token is required"),
-			pageId: z.string().min(1, "Page ID is required"),
-			newPageName: z.string().min(1, "New page name is required"),
-		});
-		const parseResult = renamePageSchema.safeParse(req.body);
-		if (!parseResult.success) {
-			return {
-				resStatus: 400,
-				resMessage: {
-					message: JSON.parse(parseResult.error).map((err)=>err.message).join(", "),
-				},
-			};
-		}
-		const { token, pageId, newPageName } = parseResult.data;
+  try {
+    // Validate request body
+    const { token, pageId, newPageName } = renamePageSchema.parse(req.body);
 
-        // verify user and find page in DB
-        const user = await verifyToken(token);
-        if (!user) {
-            return {
-                resStatus: 400,
-                resMessage: {
-                    "message": "User not logged in"
-                }
-            };
-        }
+    // Verify user
+    const user = await verifyToken(token);
+    if (!user) return makeResponse(401, "User not logged in");
 
-        const page = await Page.findById(pageId);
-        if (!page) {
-            return {
-                resStatus: 404,
-                resMessage: {
-                    "message": "Page not found"
-                }
-            };
-        }
+    // Find page
+    const page = await Page.findById(pageId);
+    if (!page) return makeResponse(404, "Page not found");
 
-        // checks if user is the owner of the page
-        if (!page.owner.equals(user._id)) {
-            return {
-                resStatus: 403,
-                resMessage: {
-                    "message": "Not authorized"
-                }
-            };
-        }
-
-        // change the page name and save to DB
-        page.pageName = newPageName;
-        await page.save();
-
-        // return new page to user
-        return {
-            resStatus: 200,
-            resMessage: {
-                "Updated Page": page
-            }
-        };
-
-    } catch (err) {
-        console.log(err);
-        return {
-            resStatus: 500,
-            resMessage: {
-                "message": "Internal server error"
-            }
-        };
+    // Check ownership
+    if (!page.owner.equals(user._id)) {
+      return makeResponse(403, "Not authorized");
     }
+
+    // Update & save page
+    page.pageName = newPageName;
+    await page.save();
+
+    // Success
+    return {
+      resStatus: 200,
+      resMessage: { updatedPage: page },
+    };
+  } catch (err) {
+    if (err instanceof z.ZodError) {
+      return makeResponse(400, err.errors.map(e => e.message).join(", "));
+    }
+    console.error("Rename Page Error:", err);
+    return makeResponse(500, "Internal server error");
+  }
 }
